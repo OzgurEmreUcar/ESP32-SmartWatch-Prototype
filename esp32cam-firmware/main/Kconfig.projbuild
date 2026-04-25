@@ -1,0 +1,10 @@
+# Wi-Fi credentials exposed through `idf.py menuconfig`.
+# Values are compiled into the firmware as CONFIG_WIFI_SSID / CONFIG_WIFI_PASS.
+menu "WiFi Configuration"
+    config WIFI_SSID
+        string "WiFi SSID"
+        default "default_ssid"
+    config WIFI_PASS
+        string "WiFi Password"
+        default "default_password"
+endmenu

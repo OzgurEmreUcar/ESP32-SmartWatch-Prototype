@@ -1,0 +1,9 @@
+# This file was generated using idf.py save-defconfig. It can be edited manually.
+# Espressif IoT Development Framework (ESP-IDF) 6.0.0 Project Minimal Configuration
+#
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_WIFI_SSID="default"
+CONFIG_WIFI_PASS="default"
+CONFIG_HTTPD_WS_SUPPORT=y
+CONFIG_SPIRAM=y
+CONFIG_LWIP_MAX_SOCKETS=12
