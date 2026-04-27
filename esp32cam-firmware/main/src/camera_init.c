@@ -68,7 +68,7 @@ esp_err_t camera_init(void) {
         .ledc_channel   = LEDC_CHANNEL_0,
         .pixel_format   = PIXFORMAT_JPEG,
         .frame_size     = FRAMESIZE_240X240,
-        .jpeg_quality   = 15,
+        .jpeg_quality   = 20,
         .fb_count       = 2,
         .fb_location    = CAMERA_FB_IN_PSRAM,
         .grab_mode      = CAMERA_GRAB_LATEST
