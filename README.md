@@ -72,8 +72,18 @@ idf.py -p /dev/ttyUSB1 flash monitor
 
 ## UI Design Showcase
 
-| Hardware & Casing | Home Screen | IMU Dashboard |
+| ESP32-CAM Flash | Home Screen | IMU Dashboard |
 | :---: | :---: | :---: |
 | <img src="assets/flash.jpg" width="250" alt="Hardware and watch casing"> | <img src="assets/home.jpg" width="250" alt="Home Screen"> | <img src="assets/imu.jpg" width="250" alt="IMU Dashboard"> |
 | **ESP32-CAM Stream** | **Remote Telemetry** | **Settings Menu** |
 | <img src="assets/camera.jpg" width="250" alt="ESP32-CAM Stream"> | <img src="assets/dashboard.jpg" width="250" alt="Remote Telemetry Graph"> | <img src="assets/settings.jpg" width="250" alt="Settings Menu"> |
+
+---
+
+## Case Design Showcase
+
+| Closed Case 1 | Closed Case 2 |
+| :---: | :---: |
+| <img src="assets/closed_case.jpg" width="400" alt="Closed Case 1"> | <img src="assets/closed_case2.jpg" width="400" alt="Closed Case 2"> |
+| **Open Case 1** | **Open Case 2** |
+| <img src="assets/open_case.jpg" width="400" alt="Open Case 1"> | <img src="assets/open_case2.jpg" width="400" alt="Open Case 2"> |
