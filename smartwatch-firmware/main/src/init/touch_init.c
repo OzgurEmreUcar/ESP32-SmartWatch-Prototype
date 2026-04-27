@@ -217,16 +217,18 @@ void app_lvgl_touch_init(void)
  */
 void touch_reset_controller(void)
 {
-    /* Pulse RST low for ≥ 5 ms (CST816S datasheet minimum) */
     gpio_set_level(PIN_NUM_TOUCH_RST, 0);
     vTaskDelay(pdMS_TO_TICKS(20));
     gpio_set_level(PIN_NUM_TOUCH_RST, 1);
-    vTaskDelay(pdMS_TO_TICKS(100));   /* Wait for calibration to finish */
 
-    /* Flush any stale touch data generated during reset */
-    if (tp) {
-        esp_lcd_touch_read_data(tp);
+    // Hazır olana kadar bekle, max 500ms
+    int retries = 10;
+    while (retries--) {
+        vTaskDelay(pdMS_TO_TICKS(50));
+        if (esp_lcd_touch_read_data(tp) == ESP_OK) {
+            ESP_LOGI(TAG, "CST816S ready after reset");
+            return;
+        }
     }
-
-    ESP_LOGI(TAG, "CST816S reset complete — baseline recalibrated");
+    ESP_LOGW(TAG, "CST816S did not respond after reset");
 }
