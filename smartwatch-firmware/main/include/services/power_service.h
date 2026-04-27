@@ -76,3 +76,13 @@ void power_lock_clear(uint32_t lock_bit, const char *reason);
  * or display hardware, which causes visible flickering/corruption.
  */
 bool power_is_waking_up(void);
+
+/* ── Display State Query ───────────────────────────────────────── */
+
+/**
+ * @brief Returns true when the display is showing content (ACTIVE or DIM).
+ *
+ * Background tasks (battery, RTC) should skip UI updates and sensor
+ * reads when this returns false to save CPU and I2C power.
+ */
+bool power_is_display_showing(void);

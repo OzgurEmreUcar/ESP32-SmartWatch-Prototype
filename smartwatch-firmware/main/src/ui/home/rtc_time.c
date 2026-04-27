@@ -8,6 +8,7 @@
  */
 
 #include "include/ui/home/rtc_time.h"
+#include "include/services/power_service.h"
 
 static const char *TAG = "rtc";
 
@@ -142,18 +143,41 @@ void rtc_time_task(void *arg)
     char buf[12];
 
     while (1) {
-        if (rtc_read_time(&h, &m, &s) == ESP_OK) {
-            snprintf(buf, sizeof(buf), "%02d\n%02d\n%02d", h, m, s);
-        } else {
-            snprintf(buf, sizeof(buf), "--\n--\n--");
-        }
+        /* Skip I2C reads when display is off to save power */
+        if (power_is_display_showing()) {
+            if (rtc_read_time(&h, &m, &s) == ESP_OK) {
+                snprintf(buf, sizeof(buf), "%02d\n%02d\n%02d", h, m, s);
+            } else {
+                snprintf(buf, sizeof(buf), "--\n--\n--");
+            }
 
-        lvgl_port_lock(0);
-        if (time_label) {
-            lv_label_set_text(time_label, buf);
+            lvgl_port_lock(0);
+            if (time_label) {
+                lv_label_set_text(time_label, buf);
+            }
+            lvgl_port_unlock();
         }
-        lvgl_port_unlock();
 
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
+}
+
+void rtc_force_update(void)
+{
+    uint8_t h, m, s;
+    char buf[12];
+
+    if (rtc_read_time(&h, &m, &s) == ESP_OK) {
+        snprintf(buf, sizeof(buf), "%02d\n%02d\n%02d", h, m, s);
+    } else {
+        snprintf(buf, sizeof(buf), "--\n--\n--");
+    }
+
+    lvgl_port_lock(0);
+    if (time_label) {
+        lv_label_set_text(time_label, buf);
+    }
+    lvgl_port_unlock();
+
+    ESP_LOGI(TAG, "RTC forced update: %02d:%02d:%02d", h, m, s);
 }

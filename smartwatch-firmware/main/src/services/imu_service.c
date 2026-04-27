@@ -26,10 +26,11 @@ static const char *TAG = "IMU_SERVICE";
 #define RAD_TO_DEG 57.295779513082320876798154814105
 
 /* ── Module State ─────────────────────────────────────────────── */
-static i2c_dev_t       s_dev         = {0};
-static volatile bool   s_imu_enabled = false;
-static float           s_latest_roll  = 0.0f;
-static float           s_latest_pitch = 0.0f;
+static i2c_dev_t       s_dev             = {0};
+static volatile bool   s_imu_enabled     = false;
+static float           s_latest_roll     = 0.0f;
+static float           s_latest_pitch    = 0.0f;
+static TaskHandle_t    s_imu_task_handle = NULL;
 
 /* ═══════════════════════════════════════════════════════════════
  *  IMU Polling Task
@@ -48,21 +49,25 @@ static void imu_task(void *arg)
     float roll = 0.0, pitch = 0.0;
 
     while (1) {
-        if (s_imu_enabled) {
-            if (qmi8658c_read_data(&s_dev, &data) == ESP_OK) {
-                /* Roll: rotation around the X-axis */
-                roll = -atan2(data.acc.y, -data.acc.z) * RAD_TO_DEG;
-
-                /* Pitch: rotation around the Y-axis (atan2 with magnitude for stability) */
-                pitch = atan2(-data.acc.x,
-                              sqrt(data.acc.y * data.acc.y + data.acc.z * data.acc.z)) * RAD_TO_DEG;
-
-                s_latest_roll  = roll;
-                s_latest_pitch = pitch;
-            } else {
-                ESP_LOGE(TAG, "Failed to read IMU data");
-            }
+        /* Sleep indefinitely until enabled via task notification */
+        while (!s_imu_enabled) {
+            ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
         }
+
+        if (qmi8658c_read_data(&s_dev, &data) == ESP_OK) {
+            /* Roll: rotation around the X-axis */
+            roll = -atan2(data.acc.y, -data.acc.z) * RAD_TO_DEG;
+
+            /* Pitch: rotation around the Y-axis (atan2 with magnitude for stability) */
+            pitch = atan2(-data.acc.x,
+                          sqrt(data.acc.y * data.acc.y + data.acc.z * data.acc.z)) * RAD_TO_DEG;
+
+            s_latest_roll  = roll;
+            s_latest_pitch = pitch;
+        } else {
+            ESP_LOGE(TAG, "Failed to read IMU data");
+        }
+
         vTaskDelay(pdMS_TO_TICKS(20));          /* 50 Hz polling rate */
     }
 }
@@ -104,7 +109,7 @@ void imu_service_init(void)
         return;
     }
 
-    xTaskCreate(imu_task, "imu_task", 4096, NULL, 5, NULL);
+    xTaskCreate(imu_task, "imu_task", 4096, NULL, 5, &s_imu_task_handle);
     ESP_LOGI(TAG, "IMU service initialized successfully");
 }
 
@@ -118,6 +123,10 @@ void imu_service_set_enable(bool enable)
     if (enable) {
         ESP_LOGI(TAG, "IMU streaming enabled");
         power_lock_set(SYS_LOCK_IMU, "IMU_ON");
+        /* Wake the task from its notification wait */
+        if (s_imu_task_handle) {
+            xTaskNotifyGive(s_imu_task_handle);
+        }
     } else {
         ESP_LOGI(TAG, "IMU streaming disabled");
         power_lock_clear(SYS_LOCK_IMU, "IMU_OFF");

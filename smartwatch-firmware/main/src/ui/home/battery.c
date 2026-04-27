@@ -11,6 +11,7 @@
  */
 
 #include "include/ui/home/battery.h"
+#include "include/services/power_service.h"
 
 static const char *TAG = "battery";
 
@@ -122,7 +123,10 @@ static void update_battery_label(void)
 void battery_task(void *arg)
 {
     while (1) {
-        update_battery_label();
+        /* Skip reads when display is off to save ADC + CPU power */
+        if (power_is_display_showing()) {
+            update_battery_label();
+        }
         vTaskDelay(pdMS_TO_TICKS(5000));
     }
 }

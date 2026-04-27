@@ -41,3 +41,11 @@ extern void rtc_set_label(lv_obj_t *label);
 
 /** @brief FreeRTOS task that reads the RTC every second and refreshes the label. */
 extern void rtc_time_task(void *arg);
+
+/**
+ * @brief Force an immediate RTC read and label update.
+ *
+ * Called after light-sleep wake so the displayed clock is accurate
+ * on the very first visible frame.
+ */
+extern void rtc_force_update(void);

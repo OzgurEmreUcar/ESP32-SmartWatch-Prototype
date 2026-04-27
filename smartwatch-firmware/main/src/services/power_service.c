@@ -1,14 +1,18 @@
 /**
  * @file power_service.c
- * @brief Inactivity-based sleep management service.
+ * @brief Tiered inactivity-based power management service.
  *
- * Monitors user activity via a touch-reset timestamp and enters
- * ESP32 light sleep after a configurable timeout.  Coordinates with
- * system locks (camera, IMU, WiFi, etc.) and the "Always Awake"
- * toggle to decide whether sleep is permitted.
+ * Monitors user activity via a touch-reset timestamp and progressively
+ * reduces power consumption through three display tiers:
+ *
+ *   ACTIVE → DIM (backlight at 25 %) → OFF (display sleep) → Light Sleep
+ *
+ * Coordinates with system locks (camera, IMU, WiFi, etc.) and the
+ * "Always Awake" toggle to decide whether power saving is permitted.
  *
  * The sleep/wake sequence carefully orders display, backlight,
- * and GPIO operations to prevent visible flicker or corruption.
+ * and GPIO operations to minimize visible wake latency while
+ * preserving reliable touch controller recovery.
  */
 
 #include "include/services/power_service.h"
@@ -16,6 +20,7 @@
 #include "include/init/lcd_init.h"
 #include "include/init/touch_init.h"
 #include "include/ui/home/battery.h"
+#include "include/ui/home/rtc_time.h"
 #include "esp_sleep.h"
 #include "esp_log.h"
 #include "esp_lvgl_port.h"
@@ -29,15 +34,27 @@ extern esp_lcd_touch_handle_t tp;
 static const char *TAG = "PowerSvc";
 
 /* ── Configuration ────────────────────────────────────────────── */
-#define THRESH_SLEEP_MS    20000    /**< Inactivity threshold before light sleep (ms) */
+#define THRESH_DIM_MS        10000   /**< Inactivity before dimming (ms)        */
+#define THRESH_SCREEN_OFF_MS 15000   /**< Inactivity before display sleep (ms)  */
+#define THRESH_SLEEP_MS      20000   /**< Inactivity before light sleep (ms)    */
+#define DIM_BRIGHTNESS_DIV   4       /**< Divisor for dim brightness (25 %)     */
+
+/* ── Display Tier State ──────────────────────────────────────── */
+typedef enum {
+    DISPLAY_ACTIVE,  /**< Full brightness, all tasks running        */
+    DISPLAY_DIM,     /**< Reduced brightness, tasks still running   */
+    DISPLAY_OFF,     /**< Display in sleep mode, tasks paused       */
+} display_tier_t;
 
 /* ── Module State ─────────────────────────────────────────────── */
-static bool              s_sleep_enabled = true;    /**< User "Always Awake" toggle (inverted) */
-static bool              s_screen_on     = true;
-static uint32_t          s_lock_mask     = 0;       /**< Active SYS_LOCK_* bitmask             */
-static SemaphoreHandle_t s_lock_mux      = NULL;
-static volatile int64_t  last_touch_time = 0;
-static volatile bool     s_waking_up     = false;
+static bool              s_sleep_enabled  = true;   /**< User "Always Awake" toggle (inverted) */
+static bool              s_screen_on      = true;
+static uint32_t          s_lock_mask      = 0;      /**< Active SYS_LOCK_* bitmask             */
+static SemaphoreHandle_t s_lock_mux       = NULL;
+static volatile int64_t  last_touch_time  = 0;
+static volatile bool     s_waking_up      = false;
+static display_tier_t    s_display_state  = DISPLAY_ACTIVE;
+static uint8_t           s_saved_brightness = 255;  /**< Brightness before dim/off             */
 
 /* ═══════════════════════════════════════════════════════════════
  *  System Lock Management
@@ -82,64 +99,163 @@ void IRAM_ATTR power_reset_inactivity(void)
     last_touch_time = esp_timer_get_time();
 }
 
-/* ── Sleep Policy Accessors ───────────────────────────────────── */
+/* ── Sleep / Display Policy Accessors ────────────────────────── */
 
 void power_set_sleep_enabled(bool enabled) { s_sleep_enabled = enabled; }
 bool power_is_sleep_enabled(void)          { return s_sleep_enabled; }
 bool power_is_waking_up(void)              { return s_waking_up; }
+
+bool power_is_display_showing(void)
+{
+    return (s_display_state == DISPLAY_ACTIVE || s_display_state == DISPLAY_DIM);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+ *  Display Tier Transitions
+ * ═══════════════════════════════════════════════════════════════ */
+
+/**
+ * @brief Transition from ACTIVE → DIM.
+ * Saves current brightness and reduces it to 25 %.
+ */
+static void enter_dim(void)
+{
+    s_saved_brightness = get_lcd_brightness();
+    uint8_t dim = s_saved_brightness / DIM_BRIGHTNESS_DIV;
+    if (dim < 10) dim = 10;  /* Minimum visible level */
+    set_lcd_brightness(dim);
+    s_display_state = DISPLAY_DIM;
+    ESP_LOGI(TAG, "Display → DIM (%d → %d)", s_saved_brightness, dim);
+}
+
+/**
+ * @brief Transition from DIM → OFF.
+ * Turns backlight off and puts the LCD controller into sleep mode.
+ */
+static void enter_screen_off(void)
+{
+    set_lcd_brightness(0);
+    esp_lcd_panel_disp_on_off(lcd_panel, false);
+    s_display_state = DISPLAY_OFF;
+    s_screen_on = false;
+    ESP_LOGI(TAG, "Display → OFF");
+}
+ 
+/**
+ * @brief Restore display from DIM or OFF back to ACTIVE.
+ * Called when touch activity is detected in a reduced power tier.
+ */
+static void restore_display_active(void)
+{
+    if (s_display_state == DISPLAY_OFF) {
+        /*
+         * Suppress touch reads while we wake the CST816S.
+         * During DISPLAY_OFF the touch controller enters its own
+         * internal standby — reads before it's ready cause I2C errors.
+         */
+        s_waking_up = true;
+
+        /* Wake the LCD controller from sleep */
+        esp_lcd_panel_disp_on_off(lcd_panel, true);
+        vTaskDelay(pdMS_TO_TICKS(5));
+        s_screen_on = true;
+
+        /* Force a full redraw since the display was off */
+        lvgl_port_lock(-1);
+        if (lv_scr_act()) lv_obj_invalidate(lv_scr_act());
+        lv_refr_now(NULL);
+        lvgl_port_unlock();
+
+        /* Quick touch controller reset to wake it from standby */
+        touch_reset_controller();
+        s_waking_up = false;
+    }
+
+    set_lcd_brightness(s_saved_brightness);
+    s_display_state = DISPLAY_ACTIVE;
+    ESP_LOGI(TAG, "Display → ACTIVE (brightness %d)", s_saved_brightness);
+}
 
 /* ═══════════════════════════════════════════════════════════════
  *  Main Power Task
  * ═══════════════════════════════════════════════════════════════ */
 
 /**
- * @brief Background task that monitors inactivity and manages light sleep.
+ * @brief Background task managing the 3-tier display power and light sleep.
  *
- * When sleep is allowed and the inactivity threshold is reached:
- *   1. Freeze the current LVGL frame, turn off display and backlight.
- *   2. Hold LCD reset and CS GPIOs to prevent SPI glitches during sleep.
- *   3. Enter ESP32 light sleep (woken by touch GPIO).
- *   4. On wake: release GPIO holds, flush stale touch data, reset LVGL
- *      timers and input devices, restore display, and relight backlight.
+ * Tier progression (requires no system locks and sleep enabled):
+ *   1. ACTIVE → DIM      after THRESH_DIM_MS of inactivity
+ *   2. DIM    → OFF       after THRESH_SCREEN_OFF_MS
+ *   3. OFF    → Light Sleep after THRESH_SLEEP_MS
+ *
+ * Any touch resets the inactivity timer and restores ACTIVE state.
+ *
+ * Light-sleep wake sequence (optimized for minimal black-screen time):
+ *   1. Release GPIO holds, send DISPON, redraw, restore backlight
+ *   2. THEN reset touch controller (screen already visible)
+ *   3. Flush stale ADC / RTC data for accurate first-frame readings
  */
 static void power_task(void *arg)
 {
     (void)arg;
 
     while (1) {
-        int64_t now = esp_timer_get_time();
-        bool blocked = wifi_service_is_busy() || locks_active() || !s_sleep_enabled;
+        int64_t now        = esp_timer_get_time();
+        int64_t elapsed_us = now - last_touch_time;
 
-        if (!blocked && s_screen_on && (now - last_touch_time) > (THRESH_SLEEP_MS * 1000LL)) {
+        /* Locks and "Always Awake" block all tier transitions */
+        bool tier_blocked  = locks_active() || !s_sleep_enabled;
+        /* WiFi busy additionally blocks light sleep entry */
+        bool sleep_blocked = tier_blocked || wifi_service_is_busy();
+
+        /* ── Restore on new touch activity ── */
+        if (s_display_state != DISPLAY_ACTIVE &&
+            elapsed_us < (THRESH_DIM_MS * 1000LL))
+        {
+            restore_display_active();
+        }
+
+        /* ── Tier 1: ACTIVE → DIM ── */
+        if (!tier_blocked &&
+            s_display_state == DISPLAY_ACTIVE &&
+            elapsed_us > (THRESH_DIM_MS * 1000LL))
+        {
+            enter_dim();
+        }
+
+        /* ── Tier 2: DIM → OFF ── */
+        if (!tier_blocked &&
+            s_display_state == DISPLAY_DIM &&
+            elapsed_us > (THRESH_SCREEN_OFF_MS * 1000LL))
+        {
+            enter_screen_off();
+        }
+
+        /* ── Tier 3: OFF → Light Sleep ── */
+        if (!sleep_blocked &&
+            s_display_state == DISPLAY_OFF &&
+            elapsed_us > (THRESH_SLEEP_MS * 1000LL))
+        {
             ESP_LOGI(TAG, "Entering Light Sleep...");
             s_waking_up = true;
 
-            /* ── Pre-sleep: freeze display ── */
+            /* Freeze LVGL frame buffer before sleep */
             lvgl_port_lock(-1);
             lv_refr_now(NULL);
-            lcd_backlight_prepare_sleep();
-            esp_lcd_panel_disp_on_off(lcd_panel, false);
             lvgl_port_unlock();
 
             /* Hold LCD control GPIOs to prevent floating during sleep */
             gpio_hold_en(LCD_GPIO_RST);
             gpio_hold_en(LCD_GPIO_CS);
-            s_screen_on = false;
 
             /* ── Enter light sleep ── */
             esp_light_sleep_start();
 
-            /* ── Post-wake recovery ── */
+            /* ── Post-wake recovery (display-first for fast visual response) ── */
             ESP_LOGI(TAG, "Waking up...");
 
             gpio_hold_dis(LCD_GPIO_RST);
             gpio_hold_dis(LCD_GPIO_CS);
-
-            /* Hardware-reset touch controller so it recalibrates its baseline */
-            touch_reset_controller();
-
-            /* Discard stale ADC charge so battery percentage is accurate instantly */
-            battery_adc_warmup();
 
             lvgl_port_lock(-1);
 
@@ -157,25 +273,52 @@ static void power_task(void *arg)
                 indev = lv_indev_get_next(indev);
             }
 
-            /* Wait for ST7789 to stabilize after display-on */
+            /* Turn display on (DISPON command, not a full reset) */
             esp_lcd_panel_disp_on_off(lcd_panel, true);
-            vTaskDelay(pdMS_TO_TICKS(120));
+            vTaskDelay(pdMS_TO_TICKS(5));
 
             /* Force a full screen redraw */
             if (lv_scr_act()) lv_obj_invalidate(lv_scr_act());
             lv_refr_now(NULL);
 
             last_touch_time = esp_timer_get_time();
-            s_screen_on = true;
+            s_screen_on     = true;
+            s_display_state = DISPLAY_ACTIVE;
             lvgl_port_unlock();
 
-            /* Brief settle, then restore backlight */
-            vTaskDelay(pdMS_TO_TICKS(20));
-            lcd_backlight_reinit();
-            vTaskDelay(pdMS_TO_TICKS(100));
+            /* Restore backlight — screen is now visible to the user */
+            set_lcd_brightness(s_saved_brightness);
+
+            /*
+             * Touch controller reset AFTER display is visible.
+             * The user sees the screen immediately; touch becomes
+             * responsive once calibration completes (~100-200 ms).
+             * s_waking_up flag suppresses spurious touch events
+             * during this window.
+             */
+            touch_reset_controller();
+
+            /* Flush stale ADC/RTC data for accurate first-frame readings */
+            battery_adc_warmup();
+            rtc_force_update();
+
             s_waking_up = false;
         }
-        vTaskDelay(pdMS_TO_TICKS(200));
+
+        /*
+         * Adaptive polling interval:
+         *   ACTIVE → 500 ms  (no urgency, 10 s until dim)
+         *   DIM    → 200 ms  (5 s until screen off)
+         *   OFF    → 100 ms  (detect touch-to-wake quickly)
+         */
+        uint32_t poll_ms;
+        switch (s_display_state) {
+            case DISPLAY_ACTIVE: poll_ms = 500; break;
+            case DISPLAY_DIM:    poll_ms = 200; break;
+            case DISPLAY_OFF:    poll_ms = 100; break;
+            default:             poll_ms = 200; break;
+        }
+        vTaskDelay(pdMS_TO_TICKS(poll_ms));
     }
 }
 
@@ -193,5 +336,6 @@ void power_service_init(void)
     BaseType_t ok = xTaskCreate(power_task, "pwr_task", 8192, NULL, 5, NULL);
     configASSERT(ok == pdPASS);
 
-    ESP_LOGI(TAG, "Power service initialised  [Sleep=%ds]", THRESH_SLEEP_MS / 1000);
+    ESP_LOGI(TAG, "Power service initialised  [Dim=%ds  Off=%ds  Sleep=%ds]",
+             THRESH_DIM_MS / 1000, THRESH_SCREEN_OFF_MS / 1000, THRESH_SLEEP_MS / 1000);
 }
