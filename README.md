@@ -72,21 +72,8 @@ idf.py -p /dev/ttyUSB1 flash monitor
 
 ## UI Design Showcase
 
-![Hardware and watch casing](assets/flash.jpg)
-
-### 1. Home Screen
-![Home Screen](assets/home.jpg)
-
-### 2. IMU Dashboard
-![IMU Dashboard](assets/imu.jpg)
-
-### 3. ESP32-CAM Stream
-![ESP32-CAM Stream](assets/camera.jpg)
-
-### 4. Remote Telemetry Graph
-![Remote Telemetry Graph](assets/dashboard.jpg)
-
-### 5. Settings Menu
-![Settings Menu 1](assets/settings.jpg)
-![Settings Menu 2](assets/settings2.jpg)
-
+| Hardware & Casing | Home Screen | IMU Dashboard |
+| :---: | :---: | :---: |
+| <img src="assets/flash.jpg" width="250" alt="Hardware and watch casing"> | <img src="assets/home.jpg" width="250" alt="Home Screen"> | <img src="assets/imu.jpg" width="250" alt="IMU Dashboard"> |
+| **ESP32-CAM Stream** | **Remote Telemetry** | **Settings Menu** |
+| <img src="assets/camera.jpg" width="250" alt="ESP32-CAM Stream"> | <img src="assets/dashboard.jpg" width="250" alt="Remote Telemetry Graph"> | <img src="assets/settings.jpg" width="120" alt="Settings Menu 1"> <img src="assets/settings2.jpg" width="120" alt="Settings Menu 2"> |
