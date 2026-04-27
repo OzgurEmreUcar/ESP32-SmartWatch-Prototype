@@ -82,8 +82,19 @@ idf.py -p /dev/ttyUSB1 flash monitor
 
 ## Case Design Showcase
 
-| Closed Case 1 | Closed Case 2 |
-| :---: | :---: |
-| <img src="assets/closed_case.jpg" width="400" alt="Closed Case 1"> | <img src="assets/closed_case2.jpg" width="400" alt="Closed Case 2"> |
-| **Open Case 1** | **Open Case 2** |
-| <img src="assets/open_case.jpg" width="400" alt="Open Case 1"> | <img src="assets/open_case2.jpg" width="400" alt="Open Case 2"> |
+<table align="center">
+  <tr>
+    <th colspan="2"><div align="center">Closed Case</div></th>
+  </tr>
+  <tr>
+    <td align="center"><img src="assets/closed_case.jpg" width="400" alt="Closed Case"></td>
+    <td align="center"><img src="assets/closed_case2.jpg" width="400" alt="Closed Case"></td>
+  </tr>
+  <tr>
+    <th colspan="2"><div align="center">Open Case</div></th>
+  </tr>
+  <tr>
+    <td align="center"><img src="assets/open_case.jpg" width="400" alt="Open Case"></td>
+    <td align="center"><img src="assets/open_case2.jpg" width="400" alt="Open Case"></td>
+  </tr>
+</table>
