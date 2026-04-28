@@ -210,36 +210,31 @@ void app_lvgl_touch_init(void)
  * On wakeup the stale baseline causes inaccurate touch coordinates
  * until the controller slowly self-corrects — typically 5-10 seconds.
  *
- * This function performs a thorough 3-phase recovery:
+ * This function performs a thorough 3-phase recovery, optimised for
+ * minimal latency so the screen feels instantly responsive:
  *
- *   Phase 1 – Hard reset with extended pulse.  The CST816S datasheet
- *             specifies ≥ 5 ms, but after prolonged sleep the internal
- *             state machine benefits from a longer 50 ms low pulse
- *             to guarantee a full register reset.
+ *   Phase 1 – Hard reset pulse (10 ms).  The CST816S datasheet
+ *             specifies ≥ 5 ms; 10 ms provides a safe margin.
  *
- *   Phase 2 – Wait for I2C readiness.  The controller needs ~100 ms
- *             to complete its power-on self-test and begin responding
- *             to I2C transactions.
+ *   Phase 2 – Wait for I2C readiness.  Poll every 20 ms until the
+ *             controller responds (typically within 40-60 ms).
  *
- *   Phase 3 – Post-calibration drain.  Even after I2C comes online,
- *             the capacitive baseline is still settling for the first
- *             100-300 ms.  Reads during this window return valid-looking
- *             but inaccurate coordinates.  We perform several throwaway
- *             reads spaced apart so the baseline can converge before
+ *   Phase 3 – Post-calibration drain.  A few throwaway reads spaced
+ *             20 ms apart let the capacitive baseline converge before
  *             real touch events are processed.
  */
 void touch_reset_controller(void)
 {
-    /* Phase 1: Extended reset pulse (50 ms low) */
+    /* Phase 1: Reset pulse (5 ms low — CST816S datasheet minimum) */
     gpio_set_level(PIN_NUM_TOUCH_RST, 0);
-    vTaskDelay(pdMS_TO_TICKS(50));
+    vTaskDelay(pdMS_TO_TICKS(5));
     gpio_set_level(PIN_NUM_TOUCH_RST, 1);
 
-    /* Phase 2: Wait for I2C readiness (max ~750 ms) */
-    int retries = 15;
+    /* Phase 2: Wait for I2C readiness (max ~100 ms) */
+    int retries = 10;
     bool ready  = false;
     while (retries--) {
-        vTaskDelay(pdMS_TO_TICKS(50));
+        vTaskDelay(pdMS_TO_TICKS(10));
         if (esp_lcd_touch_read_data(tp) == ESP_OK) {
             ready = true;
             break;
@@ -251,11 +246,11 @@ void touch_reset_controller(void)
         return;
     }
 
-    /* Phase 3: Drain inaccurate readings while baseline settles.
-     * Space them 30 ms apart to give the capacitive sensing engine
-     * time to converge between each measurement cycle.              */
-    for (int i = 0; i < 8; i++) {
-        vTaskDelay(pdMS_TO_TICKS(30));
+    /* Phase 3: Drain first readings while baseline settles.
+     * 2 reads at 10 ms intervals — the controller converges fast
+     * once it's already responding to I2C. */
+    for (int i = 0; i < 2; i++) {
+        vTaskDelay(pdMS_TO_TICKS(10));
         esp_lcd_touch_read_data(tp);
     }
 

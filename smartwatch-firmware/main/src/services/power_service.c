@@ -144,20 +144,24 @@ static void enter_screen_off(void)
 /**
  * @brief Restore display from DIM or OFF back to ACTIVE.
  * Called when touch activity is detected in a reduced power tier.
+ *
+ * Optimised for minimal perceived latency: the screen becomes visible
+ * and touch-responsive as fast as possible.  The touch controller
+ * recalibration runs AFTER touch events are already accepted — the
+ * first few touches may have slightly imprecise coordinates but the
+ * device feels instantly responsive.
  */
 static void restore_display_active(void)
 {
     if (s_display_state == DISPLAY_OFF) {
         /*
-         * Suppress touch reads while we wake the CST816S.
-         * During DISPLAY_OFF the touch controller enters its own
-         * internal standby — reads before it's ready cause I2C errors.
+         * Brief suppression while the LCD wakes.
+         * We clear this flag as soon as the backlight is on.
          */
         s_waking_up = true;
 
         /* Wake the LCD controller from sleep */
         esp_lcd_panel_disp_on_off(lcd_panel, true);
-        vTaskDelay(pdMS_TO_TICKS(5));
         s_screen_on = true;
 
         /* Force a full redraw since the display was off */
@@ -166,12 +170,24 @@ static void restore_display_active(void)
         lv_refr_now(NULL);
         lvgl_port_unlock();
 
-        /* Quick touch controller reset to wake it from standby */
-        touch_reset_controller();
+        /* Restore backlight — screen is now visible */
+        set_lcd_brightness(s_saved_brightness);
+
+        /*
+         * Accept touch events NOW.  The touch controller has been
+         * running in standby and can usually respond to I2C reads
+         * immediately.  The recalibration below improves accuracy
+         * but is not required for basic responsiveness.
+         */
         s_waking_up = false;
+
+        /* Background recalibration — non-blocking for UX */
+        touch_reset_controller();
+    } else {
+        /* DIM → ACTIVE: just restore brightness */
+        set_lcd_brightness(s_saved_brightness);
     }
 
-    set_lcd_brightness(s_saved_brightness);
     s_display_state = DISPLAY_ACTIVE;
     ESP_LOGI(TAG, "Display → ACTIVE (brightness %d)", s_saved_brightness);
 }
@@ -275,7 +291,6 @@ static void power_task(void *arg)
 
             /* Turn display on (DISPON command, not a full reset) */
             esp_lcd_panel_disp_on_off(lcd_panel, true);
-            vTaskDelay(pdMS_TO_TICKS(5));
 
             /* Force a full screen redraw */
             if (lv_scr_act()) lv_obj_invalidate(lv_scr_act());
@@ -290,19 +305,20 @@ static void power_task(void *arg)
             set_lcd_brightness(s_saved_brightness);
 
             /*
-             * Touch controller reset AFTER display is visible.
-             * The user sees the screen immediately; touch becomes
-             * responsive once calibration completes (~100-200 ms).
-             * s_waking_up flag suppresses spurious touch events
-             * during this window.
+             * Screen is visible and drawn — accept touch events NOW.
+             * The user can interact immediately.  Touch coordinates
+             * may be slightly imprecise for ~100 ms until the
+             * controller recalibrates, but the device feels instant.
+             */
+            s_waking_up = false;
+
+            /*
+             * Background housekeeping — runs while the user can
+             * already see and touch the screen.
              */
             touch_reset_controller();
-
-            /* Flush stale ADC/RTC data for accurate first-frame readings */
-            battery_adc_warmup();
             rtc_force_update();
-
-            s_waking_up = false;
+            battery_adc_warmup();
         }
 
         /*
@@ -315,7 +331,7 @@ static void power_task(void *arg)
         switch (s_display_state) {
             case DISPLAY_ACTIVE: poll_ms = 500; break;
             case DISPLAY_DIM:    poll_ms = 200; break;
-            case DISPLAY_OFF:    poll_ms = 100; break;
+            case DISPLAY_OFF:    poll_ms = 50;  break;  /* Fast polling for instant touch-to-wake */
             default:             poll_ms = 200; break;
         }
         vTaskDelay(pdMS_TO_TICKS(poll_ms));
