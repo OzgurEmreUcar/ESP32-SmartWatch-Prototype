@@ -210,25 +210,54 @@ void app_lvgl_touch_init(void)
  * On wakeup the stale baseline causes inaccurate touch coordinates
  * until the controller slowly self-corrects — typically 5-10 seconds.
  *
- * A clean reset pulse forces the CST816S to re-run its power-on
- * calibration sequence (~50 ms), after which touch accuracy is
- * immediately restored.  We also drain any residual interrupt event
- * so the first real touch isn't lost.
+ * This function performs a thorough 3-phase recovery:
+ *
+ *   Phase 1 – Hard reset with extended pulse.  The CST816S datasheet
+ *             specifies ≥ 5 ms, but after prolonged sleep the internal
+ *             state machine benefits from a longer 50 ms low pulse
+ *             to guarantee a full register reset.
+ *
+ *   Phase 2 – Wait for I2C readiness.  The controller needs ~100 ms
+ *             to complete its power-on self-test and begin responding
+ *             to I2C transactions.
+ *
+ *   Phase 3 – Post-calibration drain.  Even after I2C comes online,
+ *             the capacitive baseline is still settling for the first
+ *             100-300 ms.  Reads during this window return valid-looking
+ *             but inaccurate coordinates.  We perform several throwaway
+ *             reads spaced apart so the baseline can converge before
+ *             real touch events are processed.
  */
 void touch_reset_controller(void)
 {
+    /* Phase 1: Extended reset pulse (50 ms low) */
     gpio_set_level(PIN_NUM_TOUCH_RST, 0);
-    vTaskDelay(pdMS_TO_TICKS(20));
+    vTaskDelay(pdMS_TO_TICKS(50));
     gpio_set_level(PIN_NUM_TOUCH_RST, 1);
 
-    // Hazır olana kadar bekle, max 500ms
-    int retries = 10;
+    /* Phase 2: Wait for I2C readiness (max ~750 ms) */
+    int retries = 15;
+    bool ready  = false;
     while (retries--) {
         vTaskDelay(pdMS_TO_TICKS(50));
         if (esp_lcd_touch_read_data(tp) == ESP_OK) {
-            ESP_LOGI(TAG, "CST816S ready after reset");
-            return;
+            ready = true;
+            break;
         }
     }
-    ESP_LOGW(TAG, "CST816S did not respond after reset");
+
+    if (!ready) {
+        ESP_LOGW(TAG, "CST816S did not respond after reset");
+        return;
+    }
+
+    /* Phase 3: Drain inaccurate readings while baseline settles.
+     * Space them 30 ms apart to give the capacitive sensing engine
+     * time to converge between each measurement cycle.              */
+    for (int i = 0; i < 8; i++) {
+        vTaskDelay(pdMS_TO_TICKS(30));
+        esp_lcd_touch_read_data(tp);
+    }
+
+    ESP_LOGI(TAG, "CST816S ready after reset (baseline settled)");
 }

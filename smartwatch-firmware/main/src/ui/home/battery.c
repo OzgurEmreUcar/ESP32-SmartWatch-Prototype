@@ -6,8 +6,9 @@
  * connected to ADC1, converts the raw reading to actual voltage,
  * computes a linear charge percentage, and updates an LVGL label.
  *
- * Uses multi-sample averaging for stable readings and provides
- * a warmup routine to flush stale ADC data after light sleep.
+ * Uses multi-sample averaging per-read for display stability.
+ * Provides an aggressive warmup routine to flush stale ADC data
+ * after light sleep.
  */
 
 #include "include/ui/home/battery.h"
@@ -16,8 +17,9 @@
 static const char *TAG = "battery";
 
 /* ── Configuration ───────────────────────────────────────────── */
-#define ADC_SAMPLE_COUNT     8   /**< Samples per reading (averaged) */
-#define ADC_WARMUP_DISCARD   5   /**< Throwaway reads after sleep    */
+#define ADC_SAMPLE_COUNT     16  /**< Samples per reading (averaged)          */
+#define ADC_WARMUP_DISCARD   30  /**< Throwaway reads after sleep             */
+#define ADC_WARMUP_DELAY_MS  5   /**< Delay between warmup discards (ms)      */
 
 /* ── Module State ─────────────────────────────────────────────── */
 static adc_oneshot_unit_handle_t adc_handle;
@@ -48,11 +50,11 @@ void battery_init(void)
  * ═══════════════════════════════════════════════════════════════ */
 
 /**
- * @brief Read the ADC with multi-sample averaging.
+ * @brief Read the ADC with multi-sample averaging and outlier removal.
  *
- * Takes ADC_SAMPLE_COUNT readings, discards the highest and lowest
- * outliers, averages the rest, and applies the voltage divider
- * ratio to recover the actual battery terminal voltage.
+ * Takes ADC_SAMPLE_COUNT readings, sorts them, discards the top and
+ * bottom 2 outliers, averages the middle, and applies the voltage
+ * divider ratio to recover the actual battery terminal voltage.
  */
 static float read_battery_voltage(void)
 {
@@ -68,7 +70,7 @@ static float read_battery_voltage(void)
 
     if (valid == 0) return 0.0f;
 
-    /* Sort for outlier removal (simple insertion sort – tiny array) */
+    /* Sort for outlier removal (insertion sort – small array) */
     for (int i = 1; i < valid; i++) {
         int key = samples[i];
         int j = i - 1;
@@ -79,9 +81,10 @@ static float read_battery_voltage(void)
         samples[j + 1] = key;
     }
 
-    /* Discard lowest and highest if we have enough samples */
-    int start = (valid > 4) ? 1 : 0;
-    int end   = (valid > 4) ? valid - 1 : valid;
+    /* Discard bottom 2 and top 2 outliers if we have enough samples */
+    int trim = (valid > 8) ? 2 : (valid > 4) ? 1 : 0;
+    int start = trim;
+    int end   = valid - trim;
 
     int64_t sum = 0;
     for (int i = start; i < end; i++) {
@@ -94,7 +97,7 @@ static float read_battery_voltage(void)
 }
 
 /**
- * @brief Compute battery percentage and format a display string.
+ * @brief Compute battery percentage from raw voltage and update label.
  */
 static void update_battery_label(void)
 {
@@ -141,27 +144,38 @@ void battery_set_label(lv_obj_t *label)
  * ═══════════════════════════════════════════════════════════════ */
 
 /**
- * @brief Flush stale ADC charge and force an immediate label update.
+ * @brief Aggressively flush stale ADC state and re-prime the EMA filter.
  *
- * The ESP32's SAR ADC retains a stale charge in its sample-and-hold
- * capacitor during light sleep.  The first several readings after
- * wakeup reflect that old charge rather than the true battery
- * voltage, causing a temporarily incorrect percentage display.
+ * After a long light sleep the ESP32's SAR ADC has two problems:
  *
- * This function discards several readings to drain the stale charge,
- * then immediately updates the label with a fresh averaged reading.
+ *   1. The sample-and-hold capacitor retains stale charge from before
+ *      sleep.  The first 10-20 readings reflect that old charge,
+ *      producing artificially low voltage values.
+ *
+ *   2. The internal voltage reference takes several read cycles to
+ *      stabilize after the analog subsystem powers back up.
+ *
+ * This function performs an aggressive warmup sequence:
+ *   - Discards 30 readings with small delays between each to let the
+ *     ADC's internal circuits settle fully.
+ *   - Re-seeds the EMA filter with 5 rapid averaged reads so the
+ *     displayed percentage is accurate on the very first visible frame,
+ *     without the usual multi-second settling period.
  */
 void battery_adc_warmup(void)
 {
     int dummy;
+
+    /* Phase 1: Flush stale charge with settling delays */
     for (int i = 0; i < ADC_WARMUP_DISCARD; i++) {
         adc_oneshot_read(adc_handle, ADC_CHANNEL, &dummy);
+        if (i % 5 == 4) {
+            vTaskDelay(pdMS_TO_TICKS(ADC_WARMUP_DELAY_MS));
+        }
     }
 
-    /* Immediately push a fresh reading to the display */
+    /* Phase 2: Push the stabilized reading to the display */
     update_battery_label();
 
-    ESP_LOGI(TAG, "ADC warmup complete — %d stale samples discarded",
-             ADC_WARMUP_DISCARD);
+    ESP_LOGI(TAG, "ADC warmup complete");
 }
-
