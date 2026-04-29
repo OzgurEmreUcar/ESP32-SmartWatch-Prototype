@@ -110,6 +110,7 @@ static void update_battery_label(void)
     float pct = ((voltage - BATTERY_VOLT_EMPTY) /
                  (BATTERY_VOLT_FULL - BATTERY_VOLT_EMPTY)) * 100.0f;
 
+    /* Display absolute raw voltage and percentage */
     char buf[24];
     snprintf(buf, sizeof(buf), "%.1fV  %.0f%%", voltage, pct);
 

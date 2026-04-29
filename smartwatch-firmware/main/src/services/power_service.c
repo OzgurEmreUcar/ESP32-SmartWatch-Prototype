@@ -173,16 +173,14 @@ static void restore_display_active(void)
         /* Restore backlight — screen is now visible */
         set_lcd_brightness(s_saved_brightness);
 
+        /* Background recalibration BEFORE enabling touch to prevent I2C bus lockup */
+        touch_reset_controller();
+
         /*
          * Accept touch events NOW.  The touch controller has been
-         * running in standby and can usually respond to I2C reads
-         * immediately.  The recalibration below improves accuracy
-         * but is not required for basic responsiveness.
+         * reset and is responding to I2C again.
          */
         s_waking_up = false;
-
-        /* Background recalibration — non-blocking for UX */
-        touch_reset_controller();
     } else {
         /* DIM → ACTIVE: just restore brightness */
         set_lcd_brightness(s_saved_brightness);
@@ -305,18 +303,18 @@ static void power_task(void *arg)
             set_lcd_brightness(s_saved_brightness);
 
             /*
+             * Reset the touch controller BEFORE enabling LVGL touch reads
+             * to prevent I2C bus lockout from NACKs during hardware reset.
+             */
+            touch_reset_controller();
+
+            /*
              * Screen is visible and drawn — accept touch events NOW.
-             * The user can interact immediately.  Touch coordinates
-             * may be slightly imprecise for ~100 ms until the
-             * controller recalibrates, but the device feels instant.
+             * The user can interact immediately.
              */
             s_waking_up = false;
 
-            /*
-             * Background housekeeping — runs while the user can
-             * already see and touch the screen.
-             */
-            touch_reset_controller();
+            /* Background housekeeping */
             rtc_force_update();
             battery_adc_warmup();
         }
