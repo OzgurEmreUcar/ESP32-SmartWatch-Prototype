@@ -173,11 +173,12 @@ void rtc_force_update(void)
         snprintf(buf, sizeof(buf), "--\n--\n--");
     }
 
-    lvgl_port_lock(0);
-    if (time_label) {
-        lv_label_set_text(time_label, buf);
+    if (lvgl_port_lock(pdMS_TO_TICKS(100))) {
+        if (time_label) {
+            lv_label_set_text(time_label, buf);
+        }
+        lvgl_port_unlock();
     }
-    lvgl_port_unlock();
 
     ESP_LOGI(TAG, "RTC forced update: %02d:%02d:%02d", h, m, s);
 }

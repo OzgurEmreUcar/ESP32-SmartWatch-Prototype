@@ -227,18 +227,20 @@ void touch_reset_controller(void)
 {
     /* Phase 1: Reset pulse (5 ms low — CST816S datasheet minimum) */
     gpio_set_level(PIN_NUM_TOUCH_RST, 0);
-    vTaskDelay(pdMS_TO_TICKS(5));
+    esp_rom_delay_us(5000); 
     gpio_set_level(PIN_NUM_TOUCH_RST, 1);
 
     /* Phase 2: Wait for I2C readiness (max ~100 ms) */
-    int retries = 10;
+    esp_rom_delay_us(10000);
+
+    int retries = 20;
     bool ready  = false;
     while (retries--) {
-        vTaskDelay(pdMS_TO_TICKS(10));
         if (esp_lcd_touch_read_data(tp) == ESP_OK) {
             ready = true;
             break;
         }
+        vTaskDelay(pdMS_TO_TICKS(5));
     }
 
     if (!ready) {
@@ -247,11 +249,11 @@ void touch_reset_controller(void)
     }
 
     /* Phase 3: Drain first readings while baseline settles.
-     * 2 reads at 10 ms intervals — the controller converges fast
-     * once it's already responding to I2C. */
-    for (int i = 0; i < 2; i++) {
-        vTaskDelay(pdMS_TO_TICKS(10));
+     * After long sleep, the first few reads are often noisy or
+     * inaccurate. Draining 5 samples ensures stability. */
+    for (int i = 0; i < 5; i++) {
         esp_lcd_touch_read_data(tp);
+        vTaskDelay(pdMS_TO_TICKS(5));
     }
 
     ESP_LOGI(TAG, "CST816S ready after reset (baseline settled)");

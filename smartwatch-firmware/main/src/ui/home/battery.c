@@ -114,9 +114,10 @@ static void update_battery_label(void)
     char buf[24];
     snprintf(buf, sizeof(buf), "%.1fV  %.0f%%", voltage, pct);
 
-    lvgl_port_lock(0);
-    lv_label_set_text(battery_label, buf);
-    lvgl_port_unlock();
+    if (lvgl_port_lock(pdMS_TO_TICKS(100))) {
+        lv_label_set_text(battery_label, buf);
+        lvgl_port_unlock();
+    }
 }
 
 /* ═══════════════════════════════════════════════════════════════

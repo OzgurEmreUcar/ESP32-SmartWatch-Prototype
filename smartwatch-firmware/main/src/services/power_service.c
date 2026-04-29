@@ -55,6 +55,7 @@ static volatile int64_t  last_touch_time  = 0;
 static volatile bool     s_waking_up      = false;
 static display_tier_t    s_display_state  = DISPLAY_ACTIVE;
 static uint8_t           s_saved_brightness = 255;  /**< Brightness before dim/off             */
+static SemaphoreHandle_t s_event_sema       = NULL;  /**< Wakes task immediately on touch       */
 
 /* ═══════════════════════════════════════════════════════════════
  *  System Lock Management
@@ -97,6 +98,15 @@ static bool locks_active(void)
 void IRAM_ATTR power_reset_inactivity(void)
 {
     last_touch_time = esp_timer_get_time();
+
+    /* Wake the power task immediately if it's waiting on the semaphore */
+    if (s_event_sema) {
+        BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+        xSemaphoreGiveFromISR(s_event_sema, &xHigherPriorityTaskWoken);
+        if (xHigherPriorityTaskWoken) {
+            portYIELD_FROM_ISR();
+        }
+    }
 }
 
 /* ── Sleep / Display Policy Accessors ────────────────────────── */
@@ -167,7 +177,7 @@ static void restore_display_active(void)
         /* Force a full redraw since the display was off */
         lvgl_port_lock(-1);
         if (lv_scr_act()) lv_obj_invalidate(lv_scr_act());
-        lv_refr_now(NULL);
+        //lv_refr_now(NULL);
         lvgl_port_unlock();
 
         /* Restore backlight — screen is now visible */
@@ -268,12 +278,23 @@ static void power_task(void *arg)
             /* ── Post-wake recovery (display-first for fast visual response) ── */
             ESP_LOGI(TAG, "Waking up...");
 
+            /*
+             * RESET TOUCH IMMEDIATELY.
+             * We do this first so its hardware reset pulse (5ms) and boot wait
+             * run in parallel with the LCD's own power-up sequence.
+             */
+            touch_reset_controller();
+
             gpio_hold_dis(LCD_GPIO_RST);
             gpio_hold_dis(LCD_GPIO_CS);
 
             lvgl_port_lock(-1);
 
-            /* Reset all LVGL timers to avoid a burst of queued callbacks */
+            /* 
+             * Reset all LVGL timers to avoid a burst of queued callbacks.
+             * This prevents the device from freezing while trying to "catch up" 
+             * on minutes/hours of missed animation frames or logic cycles.
+             */
             lv_timer_t *timer = lv_timer_get_next(NULL);
             while (timer != NULL) {
                 lv_timer_reset(timer);
@@ -292,7 +313,7 @@ static void power_task(void *arg)
 
             /* Force a full screen redraw */
             if (lv_scr_act()) lv_obj_invalidate(lv_scr_act());
-            lv_refr_now(NULL);
+            //lv_refr_now(NULL);
 
             last_touch_time = esp_timer_get_time();
             s_screen_on     = true;
@@ -301,12 +322,6 @@ static void power_task(void *arg)
 
             /* Restore backlight — screen is now visible to the user */
             set_lcd_brightness(s_saved_brightness);
-
-            /*
-             * Reset the touch controller BEFORE enabling LVGL touch reads
-             * to prevent I2C bus lockout from NACKs during hardware reset.
-             */
-            touch_reset_controller();
 
             /*
              * Screen is visible and drawn — accept touch events NOW.
@@ -327,12 +342,17 @@ static void power_task(void *arg)
          */
         uint32_t poll_ms;
         switch (s_display_state) {
-            case DISPLAY_ACTIVE: poll_ms = 500; break;
-            case DISPLAY_DIM:    poll_ms = 200; break;
-            case DISPLAY_OFF:    poll_ms = 50;  break;  /* Fast polling for instant touch-to-wake */
-            default:             poll_ms = 200; break;
+            case DISPLAY_ACTIVE: poll_ms = 1000; break; /* Slow poll when active */
+            case DISPLAY_DIM:    poll_ms = 500;  break;
+            case DISPLAY_OFF:    poll_ms = 200;  break; /* CPU is awake, just waiting for touch */
+            default:             poll_ms = 500;  break;
         }
-        vTaskDelay(pdMS_TO_TICKS(poll_ms));
+
+        /* 
+         * Wait for either a timeout OR a touch event.
+         * This makes the "Off -> Active" transition feel instantaneous.
+         */
+        xSemaphoreTake(s_event_sema, pdMS_TO_TICKS(poll_ms));
     }
 }
 
@@ -344,6 +364,9 @@ void power_service_init(void)
 {
     s_lock_mux = xSemaphoreCreateMutex();
     configASSERT(s_lock_mux);
+
+    s_event_sema = xSemaphoreCreateBinary();
+    configASSERT(s_event_sema);
 
     last_touch_time = esp_timer_get_time();
 
