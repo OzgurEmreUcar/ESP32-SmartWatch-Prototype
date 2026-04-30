@@ -49,14 +49,27 @@ void battery_init(void)
  *  Voltage Reading
  * ═══════════════════════════════════════════════════════════════ */
 
+static float s_ema_voltage = -1.0f;
+
 static float read_battery_voltage(void)
 {
-    int raw;
-    if (adc_oneshot_read(adc_handle, ADC_CHANNEL, &raw) != ESP_OK) {
-        return 0.0f;
+    int raw_sum = 0;
+    int valid_samples = 0;
+
+    for (int i = 0; i < ADC_SAMPLE_COUNT; i++) {
+        int raw;
+        if (adc_oneshot_read(adc_handle, ADC_CHANNEL, &raw) == ESP_OK) {
+            raw_sum += raw;
+            valid_samples++;
+        }
     }
 
-    float adc_voltage = (raw / 4095.0f) * VREF;
+    if (valid_samples == 0) {
+        return -1.0f; // Return error indicator
+    }
+
+    float raw_avg = (float)raw_sum / valid_samples;
+    float adc_voltage = (raw_avg / 4095.0f) * VREF;
     return adc_voltage * ((R1 + R2) / R2);
 }
 
@@ -66,6 +79,18 @@ static float read_battery_voltage(void)
 static void update_battery_label(void)
 {
     float voltage = read_battery_voltage();
+    if (voltage < 0.0f) {
+        return; // Ignore read errors, wait for next cycle
+    }
+
+    /* Apply Exponential Moving Average (EMA) to smooth out fluctuations */
+    if (s_ema_voltage < 0.0f) {
+        s_ema_voltage = voltage; // Initialize EMA on first successful read
+    } else {
+        s_ema_voltage = (s_ema_voltage * 0.8f) + (voltage * 0.2f);
+    }
+    
+    voltage = s_ema_voltage;
 
     /* Clamp to valid range */
     if (voltage > BATTERY_VOLT_FULL)  voltage = BATTERY_VOLT_FULL;
@@ -111,5 +136,12 @@ void battery_set_label(lv_obj_t *label)
 
 void battery_adc_warmup(void)
 {
+    /* Flush stale internal capacitor charge after sleep */
+    for (int i = 0; i < ADC_WARMUP_DISCARD; i++) {
+        int raw;
+        adc_oneshot_read(adc_handle, ADC_CHANNEL, &raw);
+        vTaskDelay(pdMS_TO_TICKS(ADC_WARMUP_DELAY_MS));
+    }
+
     update_battery_label();
 }

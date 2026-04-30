@@ -331,7 +331,7 @@ static void power_task(void *arg)
 
             /* Background housekeeping */
             rtc_force_update();
-            battery_adc_warmup();
+            //battery_adc_warmup();
         }
 
         /*
