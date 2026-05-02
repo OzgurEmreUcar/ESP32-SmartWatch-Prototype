@@ -268,6 +268,9 @@ static void power_task(void *arg)
             lv_refr_now(NULL);
             lvgl_port_unlock();
 
+            /* Stop LVGL tick timer so it doesn't try to catch up after sleep */
+            lvgl_port_stop();
+
             /* Hold LCD control GPIOs to prevent floating during sleep */
             gpio_hold_en(LCD_GPIO_RST);
             gpio_hold_en(LCD_GPIO_CS);
@@ -277,6 +280,9 @@ static void power_task(void *arg)
 
             /* ── Post-wake recovery (display-first for fast visual response) ── */
             ESP_LOGI(TAG, "Waking up...");
+
+            /* Resume LVGL tick timer from the new current time */
+            lvgl_port_resume();
 
             /*
              * RESET TOUCH IMMEDIATELY.
@@ -289,17 +295,6 @@ static void power_task(void *arg)
             gpio_hold_dis(LCD_GPIO_CS);
 
             lvgl_port_lock(-1);
-
-            /* 
-             * Reset all LVGL timers to avoid a burst of queued callbacks.
-             * This prevents the device from freezing while trying to "catch up" 
-             * on minutes/hours of missed animation frames or logic cycles.
-             */
-            lv_timer_t *timer = lv_timer_get_next(NULL);
-            while (timer != NULL) {
-                lv_timer_reset(timer);
-                timer = lv_timer_get_next(timer);
-            }
 
             /* Clear stale input state across the sleep boundary */
             lv_indev_t *indev = lv_indev_get_next(NULL);
@@ -331,7 +326,7 @@ static void power_task(void *arg)
 
             /* Background housekeeping */
             rtc_force_update();
-            //battery_adc_warmup();
+            battery_adc_warmup();
         }
 
         /*
