@@ -4,50 +4,14 @@
  */
 
 #include "include/ui/flash_control/flash_control.h"
+#include "include/services/flash_service.h"
 #include <stdio.h>
 #include "esp_log.h"
-#include "esp_http_client.h"
 
 static const char *TAG = "FLASH_UI";
-#define ESP32_CAM_IP "192.168.1.22"
-static esp_http_client_handle_t s_http_client = NULL;
 
 static lv_obj_t *s_flash_btn   = NULL;
 static lv_obj_t *s_flash_label = NULL;
-
-static void device_control_set_flash(bool state)
-{
-    char url[128];
-    snprintf(url, sizeof(url), "http://%s/flash/%s", ESP32_CAM_IP, state ? "on" : "off");
-
-    if (s_http_client == NULL) {
-        esp_http_client_config_t config = {
-            .url = url,
-            .method = HTTP_METHOD_GET,
-            .timeout_ms = 2000,
-            .keep_alive_enable = true,
-        };
-        s_http_client = esp_http_client_init(&config);
-        if (s_http_client == NULL) {
-            ESP_LOGE(TAG, "Failed to initialize HTTP client");
-            return;
-        }
-    } else {
-        esp_http_client_set_url(s_http_client, url);
-        esp_http_client_set_method(s_http_client, HTTP_METHOD_GET);
-    }
-
-    ESP_LOGI(TAG, "Sending HTTP GET %s", url);
-    esp_err_t err = esp_http_client_perform(s_http_client);
-
-    if (err == ESP_OK) {
-        ESP_LOGI(TAG, "HTTP GET Status = %d", esp_http_client_get_status_code(s_http_client));
-    } else {
-        ESP_LOGE(TAG, "HTTP GET request failed: %s", esp_err_to_name(err));
-        esp_http_client_cleanup(s_http_client);
-        s_http_client = NULL;
-    }
-}
 
 static void flash_toggle_cb(lv_event_t *e)
 {
@@ -62,12 +26,12 @@ static void flash_toggle_cb(lv_event_t *e)
 
     if (was_on) {
         lv_obj_remove_state(btn, LV_STATE_CHECKED);
-        device_control_set_flash(false);
+        flash_service_set_state(false);
         lv_label_set_text(s_flash_label, LV_SYMBOL_CLOSE "  Flash: OFF");
         lv_obj_set_style_bg_color(btn, lv_palette_main(LV_PALETTE_GREY), 0);
     } else {
         lv_obj_add_state(btn, LV_STATE_CHECKED);
-        device_control_set_flash(true);
+        flash_service_set_state(true);
         lv_label_set_text(s_flash_label, LV_SYMBOL_OK "  Flash: ON");
         lv_obj_set_style_bg_color(btn, lv_palette_main(LV_PALETTE_AMBER), 0);
     }

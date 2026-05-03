@@ -14,7 +14,6 @@
 #include "include/init/lcd_init.h"
 #include "include/services/power_service.h"
 #include "include/services/wifi_service.h"
-#include "esp_wifi.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -102,12 +101,9 @@ static void wifi_toggle_event_cb(lv_event_t *e)
         lv_obj_set_style_bg_color(btn, lv_palette_main(LV_PALETTE_BLUE), 0);
         lv_obj_set_style_bg_color(btn, lv_palette_main(LV_PALETTE_BLUE), LV_STATE_CHECKED);
         wifi_service_set_enabled(true);
-        esp_wifi_start();
-        esp_wifi_connect();
     } else {
         lv_obj_remove_state(btn, LV_STATE_CHECKED);
         wifi_service_set_enabled(false);
-        esp_wifi_stop();
         ui_update_wifi_disconnected(NULL);
     }
 }

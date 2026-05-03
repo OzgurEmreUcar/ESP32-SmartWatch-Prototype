@@ -14,17 +14,7 @@
 #include "freertos/task.h"
 #include "esp_lvgl_port.h"
 
-/* ── ADC Configuration ────────────────────────────────────────── */
-#define ADC_CHANNEL ADC_CHANNEL_0   /**< GPIO pin wired to the voltage divider midpoint */
-
-/* ── Voltage Divider Parameters ───────────────────────────────── */
-#define VREF 3.3f                   /**< ESP32 ADC reference voltage (V) */
-#define R1   200000.0f              /**< Top resistor of the divider (Ω) */
-#define R2   100000.0f              /**< Bottom resistor of the divider (Ω) */
-
-/* ── Battery Voltage Thresholds ───────────────────────────────── */
-#define BATTERY_VOLT_FULL  3.8f     /**< Voltage considered 100 % charge */
-#define BATTERY_VOLT_EMPTY 3.2f     /**< Voltage considered 0 % charge */
+/* ── Public API ───────────────────────────────────────────────── */
 
 /* ── Public API ───────────────────────────────────────────────── */
 
