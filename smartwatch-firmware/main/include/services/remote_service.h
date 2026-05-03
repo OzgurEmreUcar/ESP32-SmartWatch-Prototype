@@ -10,9 +10,6 @@
 
 #include <stdbool.h>
 
-/** @brief Initialize the remote service (actual connection is on-demand). */
-void remote_service_init(void);
-
 /**
  * @brief Get the latest value received from the remote sensor.
  * @return The most recent floating-point sensor reading.

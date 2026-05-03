@@ -30,5 +30,4 @@ void app_main(void)
     app_ui_init();          /* Build tabview and all application tabs   */
     power_service_init();   /* Inactivity monitor and light-sleep task  */
     imu_service_init();     /* QMI8658C IMU polling task                */
-    remote_service_init();  /* WebSocket sensor stream (on-demand)      */
 }

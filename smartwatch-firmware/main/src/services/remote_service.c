@@ -60,11 +60,6 @@ static void websocket_event_handler(void *handler_args, esp_event_base_t base,
  *  Public API
  * ═══════════════════════════════════════════════════════════════ */
 
-void remote_service_init(void)
-{
-    /* Connection is established on-demand via remote_service_set_enable() */
-}
-
 float remote_service_get_value(void)
 {
     return s_remote_value;
